@@ -21,81 +21,86 @@ st.title("AI Document Assistant 🤖")
 
 @st.cache_resource
 def load_rag_system():
-    if not os.path.exists("mahabharata.pdf"):
-        st.error("❌ mahabharata.pdf not found. Please add it to the project folder.")
-        st.stop()
+    try :
+        if not os.path.exists("mahabharata.pdf"):
+            st.error("❌ mahabharata.pdf not found. Please add it to the project folder.")
+            st.stop()
+        
+        ### load your PDF
+        doc = fitz.open("mahabharata.pdf")
+
+        # extract text from all pages : 
+        text = ''
+        for page in doc:
+            text += page.get_text()
+
+
+
+        ### Chunking :
+
+        # cut text into chunks of 500 characters 
+        # with character overlap between chunks
+
+        def chunk_text(text, chunk_size = 500, overlap = 50):
+            chunks = []
+            start = 0
+
+            while start < len(text):
+                end = start + chunk_size
+                chunk = text[start:end]
+                chunks.append(chunk)
+                start = end - overlap # overlap so we don't miss context
+
+            return chunks
+
+        chunks = chunk_text(text)
+        print(f"Total chunks: {len(chunks)}")
+        print(f"\nFirst chunk: {chunks[0]}")
+        print(f"\nSecond chunk: {chunks[1]}")    
+
+        ### Convert Chunks into Vectors :
+
+        # load the emebedding model 
+        # this runs locally on your laptop - no API needed
+        embedder = SentenceTransformer('all-MiniLM-L6-v2')
+
+        # convert all 73 chunks into vectors 
+        embeddings = embedder.encode(chunks)
+
+        print(f'Total embeddings: {len(embeddings)}')
+        print(f'Each vector size: {len(embeddings[0])} numbers')
+
+        ### Storing all this vectors in ChromaDB so we can search them :
+
+        # create a local database
+        # saves to your laptop
+        client_db = chromadb.Client()
+
+        # create a collection (like a table in database)
+        
+        try:
+            client_db.delete_collection('Mahabharata_chunks')
+        except:
+            pass
+        collection = client_db.create_collection('Mahabharata_chunks')
+        
+        # store all chunks with their vectors
+        collection.add(
+            documents = chunks,                               # original text chunks
+            embeddings = embeddings.tolist(),                 # their vectors 
+            ids = [f"chunk{i}" for i in range(len(chunks))]   # unique id for each 
+        )
+
+        print(f"Stored {collection.count()} chunks in database ✅")
+        return collection, embedder
+
+
     
-    ### load your PDF
-    doc = fitz.open("mahabharata.pdf")
+    except Exception as e:
+        st.error(f"❌ Failed to load document :{str(e)}")
 
-    # extract text from all pages : 
-    text = ''
-    for page in doc:
-        text += page.get_text()
-
-
-
-    ### Chunking :
-
-    # cut text into chunks of 500 characters 
-    # with character overlap between chunks
-
-    def chunk_text(text, chunk_size = 500, overlap = 50):
-        chunks = []
-        start = 0
-
-        while start < len(text):
-            end = start + chunk_size
-            chunk = text[start:end]
-            chunks.append(chunk)
-            start = end - overlap # overlap so we don't miss context
-
-        return chunks
-
-    chunks = chunk_text(text)
-    print(f"Total chunks: {len(chunks)}")
-    print(f"\nFirst chunk: {chunks[0]}")
-    print(f"\nSecond chunk: {chunks[1]}")    
-
-    ### Convert Chunks into Vectors :
-
-    # load the emebedding model 
-    # this runs locally on your laptop - no API needed
-    embedder = SentenceTransformer('all-MiniLM-L6-v2')
-
-    # convert all 73 chunks into vectors 
-    embeddings = embedder.encode(chunks)
-
-    print(f'Total embeddings: {len(embeddings)}')
-    print(f'Each vector size: {len(embeddings[0])} numbers')
-
-    ### Storing all this vectors in ChromaDB so we can search them :
-
-    # create a local database
-    # saves to your laptop
-    client_db = chromadb.Client()
-
-    # create a collection (like a table in database)
-    
-    try:
-        client_db.delete_collection('Mahabharata_chunks')
-    except:
-        pass
-    collection = client_db.create_collection('Mahabharata_chunks')
-    
-    # store all chunks with their vectors
-    collection.add(
-        documents = chunks,                               # original text chunks
-        embeddings = embeddings.tolist(),                 # their vectors 
-        ids = [f"chunk{i}" for i in range(len(chunks))]   # unique id for each 
-    )
-
-    print(f"Stored {collection.count()} chunks in database ✅")
-    return collection, embedder
 
 collection, embedder = load_rag_system()
-
-
 
 
 # initialize chat history
@@ -115,15 +120,20 @@ user_input = st.chat_input("Ask anything...")
 
 if user_input:
     
-        # search chromadb
-    input_embedding = embedder.encode([user_input]).tolist()
-    results = collection.query(
-        query_embeddings=input_embedding,
-        n_results=3
-    )
+    try :
+            # search chromadb
+        input_embedding = embedder.encode([user_input]).tolist()
+        results = collection.query(
+            query_embeddings=input_embedding,
+            n_results=3
+        )
 
-    # Better way (works for any n_results):
-    context = "\n".join(results['documents'][0])
+        # Better way (works for any n_results):
+        context = "\n".join(results['documents'][0])
+        
+    except Exception as e :
+        st.error("❌ Search failed. Please try again.")
+        st.stop()
     
     # add user message
     st.session_state.messages.append({
@@ -143,15 +153,20 @@ if user_input:
             {context}"""   # ← context goes in system prompt, not user message
         }
     ] + st.session_state.messages  # ← attach entire history here ✅             
-              
-    # send to groq
-    with st.spinner("Thinking..."):   
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=messages
-        )
     
-    reply = response.choices[0].message.content
+    try :          
+        # send to groq
+        with st.spinner("Thinking..."):   
+            response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=messages
+            )
+        
+        reply = response.choices[0].message.content
+        
+    except Exception as e:
+        reply = "❌ I couldn't get a response. Please try again."
+        st.error(f"API Error : {str(e)}")
     
     
     
